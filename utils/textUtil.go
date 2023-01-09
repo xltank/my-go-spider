@@ -19,8 +19,6 @@ func ParseText(text string) []model.Token {
 	if err != nil {
 		fmt.Println(`ParseText, read resp.Body error: `, err.Error())
 	}
-	// bodyStr := string(body)
-	// fmt.Println(`===`, bodyStr)
 	r := model.AnalyzedResult{}
 	err = json.Unmarshal(body, &r)
 	if err != nil {

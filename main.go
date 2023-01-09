@@ -39,7 +39,7 @@ func main() {
 	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
 		link := e.Attr("href")
 		// Print link
-		fmt.Printf("Link found: %q -> %s\n", e.Text, link)
+		fmt.Printf("Link found: %q %s\n", e.Text, link)
 		// Visit link found on page
 		// Only those links are visited which are in AllowedDomains
 		//c.Visit(e.Request.AbsoluteURL(link))
@@ -48,7 +48,7 @@ func main() {
 		}
 		err := detailC.Visit(link)
 		if err != nil {
-			fmt.Println("visit detail page error", err.Error())
+			fmt.Println("visit detail page error:", err.Error())
 		}
 	})
 
@@ -86,8 +86,6 @@ func main() {
 				article.TitleTokenStr += " "
 			}
 		}
-
-		// fmt.Println(`---> titleTokens: `, titleTokens)
 
 		/*chief := db.Chief{
 			Article: db.Article{
@@ -150,7 +148,7 @@ func main() {
 
 	err := c.Visit(siteEntry)
 	if err != nil {
-		fmt.Println("visit entry url", err.Error())
+		fmt.Println("visit entry url error:", err.Error())
 	}
 }
 
@@ -184,6 +182,4 @@ func UpsertOneByURI(col string, uri string, data interface{}) {
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	fmt.Println(r)
 }
