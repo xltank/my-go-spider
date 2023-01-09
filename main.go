@@ -148,7 +148,7 @@ func main() {
 	//	fmt.Println("url:" + r.Ctx.Get("url"))
 	//})
 
-	err
+	err := c.Visit(siteEntry)
 	if err != nil {
 		fmt.Println("visit entry url", err.Error())
 	}
