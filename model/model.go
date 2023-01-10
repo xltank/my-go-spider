@@ -4,6 +4,7 @@ import "time"
 
 type ArticleCreate struct {
 	Rel           string    `json:"rel,omitempty" bson:"rel"`
+	SimHash       string    `json:"simHash,omitempty" bson:"simHash"`
 	Title         string    `json:"title,omitempty" bson:"title"`
 	TitleTokenStr string    `json:"titleTokenStr,omitempty" bson:"titleTokenStr"`
 	TitleTokens   []Token   `json:"title_tokens,omitempty" bson:"titleTokens"`
