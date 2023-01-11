@@ -85,6 +85,7 @@ func handleDetailDom(e *colly.HTMLElement) {
 	now := time.Now()
 	article := model.ArticleCreate{
 		Rel:           "",
+		SimHash:       "",
 		Title:         title.Text(),
 		TitleTokenStr: "",
 		URI:           e.Request.URL.String(),
@@ -106,8 +107,11 @@ func handleDetailDom(e *colly.HTMLElement) {
 			article.TitleTokenStr += " "
 		}
 	}
-	article.SimHash = utils.GetSimHash(article.TitleTokenStr)
-	article.Rel = utils.GetRelBySimHash(article.SimHash)
+
+	if article.TitleTokenStr != "" {
+		article.SimHash = utils.GetSimHash(strings.ReplaceAll(article.TitleTokenStr, " ", ""))
+		article.Rel = utils.GetRelBySimHash(article.SimHash, article.PublishedAt)
+	}
 
 	imgs := e.DOM.Find(".img_wrapper").ChildrenFiltered("img")
 	imgs.Each(func(i int, selection *goquery.Selection) {
