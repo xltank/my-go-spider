@@ -47,3 +47,8 @@ type Token struct {
 type AnalyzedResult struct {
 	Tokens []Token `json:"tokens,omitempty"`
 }
+
+type HashGap struct {
+	Count uint64
+	Hash  string
+}
