@@ -2,6 +2,7 @@ package utils
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-dedup/simhash/simhashCJK"
@@ -19,7 +21,7 @@ import (
 	"github.com/lukechampine/fastxor"
 )
 
-const HashKeyExpire = 86400 * 3
+const HashKeyExpire = 86400 * 3 * time.Second
 
 func ParseText(text string) []model.Token {
 	t := fmt.Sprintf(`{"analyzer": "my_hanlp_analyzer", "text": "%s"}`, text)
@@ -90,10 +92,11 @@ func CacheSimHash(simHashStr string, publishedAt time.Time, rel string) {
 
 func getHashByKey(c chan []string, key string) {
 	ctx := context.Background()
-	result, err := db.Redis.ZRevRange(ctx, simHashPartKey+":"+key, 0, 10).Result()
+	result, err := db.Redis.ZRevRange(ctx, key, 0, 10).Result()
 	if err != nil {
 		fmt.Printf("ssdb get zset error, key: %s, error: %s", key, err.Error())
 	}
+	fmt.Println("getHashByKey:", key, result)
 	c <- result
 }
 
@@ -112,23 +115,37 @@ func GetRelBySimHash(simHashStr string, publishedAt time.Time) string {
 
 	simHashList := []string{}
 	c := make(chan []string)
-	for i := 0; i < len(simHashStr); i += 4 {
+	var wg sync.WaitGroup
+
+	for i := 0; i+4 <= len(simHashStr); i += 4 {
 		partKey := simHashPartKey + ":" + simHashStr[i:i+4]
-		go getHashByKey(c, partKey)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			getHashByKey(c, partKey)
+		}()
 	}
+
+	go func() {
+		wg.Wait()
+		close(c)
+	}()
+
 	for list := range c {
 		simHashList = append(simHashList, list...)
 	}
+	fmt.Println("simHashList: ", simHashList)
 
 	targetHashList := []model.HashGap{}
 	for _, v := range simHashList {
 		bytes, _ := hex.DecodeString(v)
-		var r []byte
-		xorBytes := fastxor.Bytes(r, sourceBytes, bytes)
-		gap := countBit1(uint64(xorBytes))
-		fmt.Printf("xor, %s, %s, n: %v", sourceBytes, bytes, gap)
+		r := make([]byte, 8)
+		r1 := r[0:]
+		fastxor.Bytes(r1, sourceBytes, bytes)
+		gap := countBit1(binary.BigEndian.Uint64(r))
+		fmt.Printf("xor\n%08b\n%08b\n%08b\ngap: %v\n", sourceBytes, bytes, r1, gap)
 		if gap <= 3 {
-			targetHashList = append(targetHashList, model.HashGap{gap, v})
+			targetHashList = append(targetHashList, model.HashGap{Count: gap, Hash: v})
 		}
 	}
 	fmt.Println("targetHashList: ", targetHashList)
@@ -146,6 +163,7 @@ func GetRelBySimHash(simHashStr string, publishedAt time.Time) string {
 		if err != nil {
 			fmt.Printf("getting %s of %s error: \n%s", simHasnRelKey, hashRelKey, err.Error())
 		}
+		fmt.Println("best hash:", bestHash, ", rel:", rel)
 		return rel
 	} else {
 		rel := uuid.New().String()

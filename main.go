@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"my-go-spider/db"
 	"my-go-spider/model"
 	"my-go-spider/utils"
@@ -38,13 +39,13 @@ func main() {
 	// On every a element which has href attribute call callback
 	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
 		link := e.Attr("href")
-		fmt.Printf("Link found: %q %s\n", e.Text, link)
+		// fmt.Printf("Link found: %q %s\n", e.Text, link)
 		if link == "" {
 			return
 		}
 		err := detailC.Visit(link)
 		if err != nil {
-			fmt.Println("visit detail page error:", err.Error())
+			// fmt.Println("visit detail page error:", err.Error())
 		}
 	})
 
@@ -70,6 +71,22 @@ func main() {
 	if err != nil {
 		fmt.Println("visit entry url error:", err.Error())
 	}
+}
+
+var testTitles = []string{
+	"【环球报资讯】职业教育2022：厚积薄发，蓄力前行",
+	"职业教育2022：厚积薄发，蓄力前行",
+	"焦点消息！职业教育2022：厚积薄发，蓄力前行",
+	"世界聚焦：职业教育2022：厚积薄发，蓄力前行",
+	"财报季丨职业教育2022：厚积薄发，蓄力前行",
+	"全球速递！职业教育2022：厚积薄发，蓄力前行",
+	"职业教育2022：厚积薄发，蓄力前行",
+	"职业教育2022：厚积薄发，蓄力前行",
+	"中信银行深圳分行举办写春联活动 将新春祝福送进千家万户",
+	"中信银行深圳分行举办写春联活动 将新春祝福送进千家万户",
+	"中国银行深圳分行举办写春联活动 将新春祝福送进千家万户",
+	"招商银行深圳分行举办写春联活动 将新春祝福送进千家万户",
+	"招商银行乌鲁木齐分行举办写春联活动 将新春祝福送进千家万户",
 }
 
 func handleDetailDom(e *colly.HTMLElement) {
@@ -100,6 +117,11 @@ func handleDetailDom(e *colly.HTMLElement) {
 		ImageLinks:    []string{},
 		VideoLinks:    []string{},
 	}
+
+	// todo: test codes
+	rand.Seed(time.Now().UnixNano())
+	article.Title = testTitles[rand.Intn(len(testTitles))]
+
 	article.TitleTokens = utils.ParseText(article.Title)
 	for i, v := range article.TitleTokens {
 		article.TitleTokenStr += v.Token
