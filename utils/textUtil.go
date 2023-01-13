@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-dedup/simhash/simhashCJK"
 	"github.com/go-redis/redis/v9"
+	"github.com/google/uuid"
 	"github.com/lukechampine/fastxor"
 )
 
@@ -52,37 +53,44 @@ const simHashPartKey = "spider:local:simHashPart"
 const simHasnRelKey = "spider:local:simHashRel"
 
 /*
-  Split simHash(base 16) to 4 parts, save to cache; If rel == "", create one;
-	1, simHashA_part1 -> [ts_simHashA, ts_simHashB, ...]
-	2, simHashA -> relA
+	Cache logic:
+	1, Saving:
+  	1, Split simHash(base 16) to 4 parts, save to cache; If rel == "", create one;
+		2, zadd simHashA_part1 ts simHashA;
+		3, expire simHashA_part1 86400*3;
+		4, set simHashA -> relA 86400*3 ex 86400*3;
 */
+
+/*
+ */
 func CacheSimHash(simHashStr string, publishedAt time.Time, rel string) {
 	for i := 0; i < len(simHashStr); i += 4 {
 		s := simHashStr[i : i+4]
-		key := simHashPartKey + ":" + s
-		fmt.Printf("cache.Set %s %s\n", key, rel)
+		partKey := simHashPartKey + ":" + s
+		fmt.Printf("cache.Set %s %s\n", partKey, rel)
 
 		var ctx = context.Background()
-		err := db.Redis.ZAdd(ctx, key, redis.Z{Score: float64(publishedAt.UnixMilli()), Member: simHashStr}).Err()
+		err := db.Redis.ZAdd(ctx, partKey, redis.Z{Score: float64(publishedAt.UnixMilli()), Member: simHashStr}).Err()
 		if err != nil {
-			fmt.Printf("Set %s error: %s, %s === %s\n", simHashPartKey, key, rel, err.Error())
+			fmt.Printf("Set %s error: %s, %s === %s\n", simHashPartKey, partKey, rel, err.Error())
 		}
-		err = db.Redis.Expire(ctx, key, HashKeyExpire).Err()
+		err = db.Redis.Expire(ctx, partKey, HashKeyExpire).Err()
 		if err != nil {
-			fmt.Printf("Set %s error: %s, %s === %s\n", simHashPartKey, key, rel, err.Error())
+			fmt.Printf("Set %s error: %s, %s === %s\n", simHashPartKey, partKey, rel, err.Error())
 		}
 
 		ctx = context.Background()
-		err = db.Redis.SetXX(ctx, key, rel, HashKeyExpire).Err()
+		hashRelKey := simHasnRelKey + ":" + simHashStr
+		err = db.Redis.SetEx(ctx, hashRelKey, rel, HashKeyExpire).Err()
 		if err != nil {
-			fmt.Printf("Set %s error: %s, %s === %s\n", simHashPartKey, key, rel, err.Error())
+			fmt.Printf("Set %s error: %s, %s === %s\n", simHasnRelKey, hashRelKey, rel, err.Error())
 		}
 	}
 }
 
 func getHashByKey(c chan []string, key string) {
 	ctx := context.Background()
-	result, err := db.Redis.ZRevRange(ctx, key, 0, 100).Result()
+	result, err := db.Redis.ZRevRange(ctx, simHashPartKey+":"+key, 0, 10).Result()
 	if err != nil {
 		fmt.Printf("ssdb get zset error, key: %s, error: %s", key, err.Error())
 	}
@@ -90,21 +98,23 @@ func getHashByKey(c chan []string, key string) {
 }
 
 /*
-  1, get simHash list by 4 simHash parts from cache;
-	2, check simHashs, pick the one by order: best match; // , latest publishedAt;
-	3, delete staled items by Redis.ZREMRANGEBYSCORE;
-	4, get rel by matched simHash;
-	5, if no suitable simHash, call CacheSimHash();
+Cache logic:
+	2, Matching:
+		1, get top 10 latest simHash list of 4 parts by ZRANGE simHashA_part1 0 10 REV;
+		2, get suitable one with xor threshold 3;
+		3, if result == nil, generate new rel and do Saving, return rel;
+		4, if result != nil, find rel by result hash and return it;
+		5, refresh 4 parts keys ttl: expire simHashA_part1 86400*3;
+		6, clear sorted set of 4 parts: ZREMRANGEBYSCORE simHashA_part1 0 (now - 3 days), which means removing set item whose score is less than now - 3 days;
 */
-func GetRelBySimHash(simHashStr string, publishedAt time.Time) (rel string) {
-	rel = ""
+func GetRelBySimHash(simHashStr string, publishedAt time.Time) string {
 	sourceBytes, _ := hex.DecodeString(simHashStr)
 
 	simHashList := []string{}
 	c := make(chan []string)
 	for i := 0; i < len(simHashStr); i += 4 {
-		key := simHashStr[i : i+4]
-		go getHashByKey(c, key)
+		partKey := simHashPartKey + ":" + simHashStr[i:i+4]
+		go getHashByKey(c, partKey)
 	}
 	for list := range c {
 		simHashList = append(simHashList, list...)
@@ -130,15 +140,19 @@ func GetRelBySimHash(simHashStr string, publishedAt time.Time) (rel string) {
 	}
 
 	if bestHash != "" {
-
+		hashRelKey := simHasnRelKey + ":" + simHashStr
+		ctx := context.Background()
+		rel, err := db.Redis.Get(ctx, hashRelKey).Result()
+		if err != nil {
+			fmt.Printf("getting %s of %s error: \n%s", simHasnRelKey, hashRelKey, err.Error())
+		}
+		return rel
+	} else {
+		rel := uuid.New().String()
+		CacheSimHash(simHashStr, publishedAt, rel)
+		fmt.Println("GetRelBySimHash, not found, make a new one and cache it:", simHashStr, publishedAt, rel)
+		return rel
 	}
-
-	// if rel == "" {
-	// 	rel = uuid.New().String()
-	// 	fmt.Println("GetRelBySimHash, not found, make a new one:", rel)
-	// 	CacheSimHash(simHashStr, publishedAt, rel)
-	// }
-	// return rel
 }
 
 func countBit1(n uint64) (count uint64) {
