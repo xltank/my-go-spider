@@ -11,6 +11,7 @@ import (
 	"my-go-spider/model"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -52,7 +53,7 @@ func GetSimHash(text string) (hash string) {
 }
 
 const simHashPartKey = "spider:local:simHashPart"
-const simHasnRelKey = "spider:local:simHashRel"
+const simHashRelKey = "spider:local:simHashRel"
 
 /*
 	Cache logic:
@@ -82,37 +83,28 @@ func CacheSimHash(simHashStr string, publishedAt time.Time, rel string) {
 		}
 	}
 	ctx := context.Background()
-	hashRelKey := simHasnRelKey + ":" + simHashStr
+	hashRelKey := simHashRelKey + ":" + simHashStr
 	err := db.Redis.SetEx(ctx, hashRelKey, rel, HashKeyExpire).Err()
-	fmt.Printf("Set %s: %s, %s\n", simHasnRelKey, hashRelKey, rel)
+	fmt.Printf("Set %s: %s, %s\n", simHashRelKey, hashRelKey, rel)
 	if err != nil {
-		fmt.Printf("Set %s error: %s, %s === %s\n", simHasnRelKey, hashRelKey, rel, err.Error())
+		fmt.Printf("Set %s error: %s, %s === %s\n", simHashRelKey, hashRelKey, rel, err.Error())
 	}
 }
 
-func getHashByKey(c chan []string, key string) {
+func getHashByKey(key string) []string {
 	ctx := context.Background()
 	result, err := db.Redis.ZRevRange(ctx, key, 0, 10).Result()
 	if err != nil {
 		fmt.Printf("ssdb get zset error, key: %s, error: %s", key, err.Error())
 	}
 	fmt.Println("getHashByKey:", key, result)
-	c <- result
+	return result
 }
 
 /*
-Cache logic:
-	2, Matching:
-		1, get top 10 latest simHash list of 4 parts by ZRANGE simHashA_part1 0 10 REV;
-		2, get suitable one with xor threshold 3;
-		3, if result == nil, generate new rel and do Saving, return rel;
-		4, if result != nil, find rel by result hash and return it;
-		5, refresh 4 parts keys ttl: expire simHashA_part1 86400*3;
-		6, clear sorted set of 4 parts: ZREMRANGEBYSCORE simHashA_part1 0 (now - 3 days), which means removing set item whose score is less than now - 3 days;
+  get simHash list by 4 parts of simHashStr.
 */
-func GetRelBySimHash(simHashStr string, publishedAt time.Time) string {
-	sourceBytes, _ := hex.DecodeString(simHashStr)
-
+func getPartsHashList(simHashStr string) []string {
 	simHashList := []string{}
 	c := make(chan []string)
 	var wg sync.WaitGroup
@@ -122,7 +114,7 @@ func GetRelBySimHash(simHashStr string, publishedAt time.Time) string {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			getHashByKey(c, partKey)
+			c <- getHashByKey(partKey)
 		}()
 	}
 
@@ -135,9 +127,16 @@ func GetRelBySimHash(simHashStr string, publishedAt time.Time) string {
 		simHashList = append(simHashList, list...)
 	}
 	// fmt.Println("simHashList: ", simHashList)
+	return simHashList
+}
 
-	targetHashList := []model.HashGap{}
-	for _, v := range simHashList {
+/*
+  get best matched hash.
+*/
+func getBestHash(simHashStr string, hashList []string) string {
+	sourceBytes, _ := hex.DecodeString(simHashStr)
+	availableHashList := []model.HashGap{}
+	for _, v := range hashList {
 		bytes, _ := hex.DecodeString(v)
 		r := make([]byte, 8)
 		r1 := r[0:]
@@ -146,23 +145,66 @@ func GetRelBySimHash(simHashStr string, publishedAt time.Time) string {
 		// fmt.Printf("xor\n%08b\n%08b\n%08b\ngap: %v\n", sourceBytes, bytes, r1, gap)
 		// fmt.Printf("gap: %v\n", gap)
 		if gap <= 3 {
-			targetHashList = append(targetHashList, model.HashGap{Count: gap, Hash: v})
+			availableHashList = append(availableHashList, model.HashGap{Count: gap, Hash: v})
 		}
 	}
-	fmt.Println("targetHashList: ", targetHashList)
+	fmt.Println("availableHashList: ", availableHashList)
 
 	var bestHash string
-	if len(targetHashList) > 0 {
-		bestHashGap := getBestHashGap(targetHashList)
+	if len(availableHashList) > 0 {
+		bestHashGap := getBestHashGap(availableHashList)
 		bestHash = bestHashGap.Hash
 	}
+	return bestHash
+}
+
+/*
+1, refresh hashRel key ttl;
+2, clear hashPart set by score;
+*/
+func clearCache(simHashStr string) {
+	fmt.Println("clear cache:", simHashStr)
+
+	relKey := simHashRelKey + ":" + simHashStr
+	ctx := context.Background()
+	db.Redis.Expire(ctx, relKey, HashKeyExpire)
+
+	for i := 0; i < len(simHashStr); i += 4 {
+		key := simHashPartKey + ":" + simHashStr[i:i+4]
+		go func() {
+			ctx := context.Background()
+			err := db.Redis.ZRemRangeByScore(ctx, key, strconv.Itoa(0), strconv.FormatInt(time.Now().UnixMilli(), 10)).Err()
+			if err != nil {
+				fmt.Println("clear part hash set error: ", err.Error())
+			}
+		}()
+	}
+}
+
+/*
+Cache logic:
+	2, Matching:
+		1, get top 10 latest simHash list of 4 parts by ZRANGE simHashA_part1 0 10 REV;
+		2, get suitable one with xor threshold 3;
+		3, if result == nil, generate new rel and do Saving, return rel;
+		4, if result != nil, find rel by result hash and return it;
+		5, refresh cache: simHashRelKey;
+		6, clear cache: 4 parts by ZREMRANGEBYSCORE simHashA_part1 0 (now - 3 days), which means removing set item whose score is less than now - 3 days;
+*/
+func GetRelBySimHash(simHashStr string, publishedAt time.Time) string {
+
+	partsHashList := getPartsHashList(simHashStr)
+
+	bestHash := getBestHash(simHashStr, partsHashList)
+
+	defer clearCache(simHashStr)
 
 	if bestHash != "" {
-		hashRelKey := simHasnRelKey + ":" + bestHash
+		hashRelKey := simHashRelKey + ":" + bestHash
 		ctx := context.Background()
 		rel, _ := db.Redis.Get(ctx, hashRelKey).Result()
 		// if err != nil {
-		// 	fmt.Printf("getting %s of %s error: \n%s", simHasnRelKey, hashRelKey, err.Error())
+		// 	fmt.Printf("getting %s of %s error: \n%s", simHashRelKey, hashRelKey, err.Error())
 		// }
 		fmt.Println("best hash:", bestHash, ", rel:", rel)
 		if rel == "" {
