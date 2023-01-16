@@ -80,13 +80,13 @@ func CacheSimHash(simHashStr string, publishedAt time.Time, rel string) {
 		if err != nil {
 			fmt.Printf("Set %s error: %s, %s === %s\n", simHashPartKey, partKey, rel, err.Error())
 		}
-
-		ctx = context.Background()
-		hashRelKey := simHasnRelKey + ":" + simHashStr
-		err = db.Redis.SetEx(ctx, hashRelKey, rel, HashKeyExpire).Err()
-		if err != nil {
-			fmt.Printf("Set %s error: %s, %s === %s\n", simHasnRelKey, hashRelKey, rel, err.Error())
-		}
+	}
+	ctx := context.Background()
+	hashRelKey := simHasnRelKey + ":" + simHashStr
+	err := db.Redis.SetEx(ctx, hashRelKey, rel, HashKeyExpire).Err()
+	fmt.Printf("Set %s: %s, %s\n", simHasnRelKey, hashRelKey, rel)
+	if err != nil {
+		fmt.Printf("Set %s error: %s, %s === %s\n", simHasnRelKey, hashRelKey, rel, err.Error())
 	}
 }
 
@@ -134,7 +134,7 @@ func GetRelBySimHash(simHashStr string, publishedAt time.Time) string {
 	for list := range c {
 		simHashList = append(simHashList, list...)
 	}
-	fmt.Println("simHashList: ", simHashList)
+	// fmt.Println("simHashList: ", simHashList)
 
 	targetHashList := []model.HashGap{}
 	for _, v := range simHashList {
@@ -143,7 +143,8 @@ func GetRelBySimHash(simHashStr string, publishedAt time.Time) string {
 		r1 := r[0:]
 		fastxor.Bytes(r1, sourceBytes, bytes)
 		gap := countBit1(binary.BigEndian.Uint64(r))
-		fmt.Printf("xor\n%08b\n%08b\n%08b\ngap: %v\n", sourceBytes, bytes, r1, gap)
+		// fmt.Printf("xor\n%08b\n%08b\n%08b\ngap: %v\n", sourceBytes, bytes, r1, gap)
+		// fmt.Printf("gap: %v\n", gap)
 		if gap <= 3 {
 			targetHashList = append(targetHashList, model.HashGap{Count: gap, Hash: v})
 		}
@@ -157,18 +158,21 @@ func GetRelBySimHash(simHashStr string, publishedAt time.Time) string {
 	}
 
 	if bestHash != "" {
-		hashRelKey := simHasnRelKey + ":" + simHashStr
+		hashRelKey := simHasnRelKey + ":" + bestHash
 		ctx := context.Background()
-		rel, err := db.Redis.Get(ctx, hashRelKey).Result()
-		if err != nil {
-			fmt.Printf("getting %s of %s error: \n%s", simHasnRelKey, hashRelKey, err.Error())
-		}
+		rel, _ := db.Redis.Get(ctx, hashRelKey).Result()
+		// if err != nil {
+		// 	fmt.Printf("getting %s of %s error: \n%s", simHasnRelKey, hashRelKey, err.Error())
+		// }
 		fmt.Println("best hash:", bestHash, ", rel:", rel)
+		if rel == "" {
+			fmt.Println("!!! error: best hash without rel in cache", bestHash)
+		}
 		return rel
 	} else {
 		rel := uuid.New().String()
-		CacheSimHash(simHashStr, publishedAt, rel)
 		fmt.Println("GetRelBySimHash, not found, make a new one and cache it:", simHashStr, publishedAt, rel)
+		CacheSimHash(simHashStr, publishedAt, rel)
 		return rel
 	}
 }
